@@ -1,4 +1,4 @@
-# MiJIT - A Simple Just-In-Time Compiler
+# MiJIT 
 
 **MiJIT** is a cross-platform Just-In-Time (JIT) compiler that demonstrates how to generate and execute machine code at runtime. It creates a personalized greeting program on the fly!
 
@@ -16,6 +16,33 @@ Linux x86-64 (Intel/AMD processors)
 macOS x86-64 (Intel Mac)  
 Linux ARM64 (ARM processors like Raspberry Pi)  
 Apple Silicon (M1/M2/M3 Macs)
+
+## Installing xmake
+
+### Linux
+```bash
+# Ubuntu/Debian
+sudo apt update
+sudo apt install xmake
+
+# If xmake is not available in your package manager:
+curl -fsSL https://xmake.io/shget.text | bash
+```
+
+### macOS
+```bash
+# Using Homebrew (recommended)
+brew install xmake
+
+# Alternative: Direct installation
+curl -fsSL https://xmake.io/shget.text | bash
+```
+
+### Windows (if using WSL)
+```bash
+# Follow Linux instructions above
+curl -fsSL https://xmake.io/shget.text | bash
+```
 
 ## How to Build and Run
 
