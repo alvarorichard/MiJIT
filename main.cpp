@@ -61,10 +61,9 @@ auto main() -> int
 #elif defined(__linux__) && defined(__aarch64__)
   std::cout << "Linux ARM64\n";
 #elif defined(__APPLE__) && defined(__aarch64__)
-  std::cout << "Apple Silicon ARM64\n";
-#endif
-
-  /**
+    std::cout << "Apple Silicon ARM64\n";
+    std::cout << "Note: Using simplified JIT approach due to system call security restrictions on Apple Silicon.\n";
+#endif  /**
    * Multi-platform Machine Code Template Explanation:
    * This code generates platform-specific machine code for system calls or function returns.
    * 
@@ -213,6 +212,12 @@ auto main() -> int
 auto append_message_size(std::vector<uint8_t>& machine_code,
                          std::string_view hello_name) -> void
 {
+#if defined(__APPLE__) && defined(__aarch64__)
+  // Apple Silicon ARM64: No-op since we're using a simple return approach
+  // The actual message printing is handled by the host program
+  (void)machine_code; // Suppress unused parameter warning
+  (void)hello_name;   // Suppress unused parameter warning
+#else
   const auto message_size = hello_name.length();  // Get length of the greeting message
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -233,11 +238,7 @@ auto append_message_size(std::vector<uint8_t>& machine_code,
   const auto encoded_size = (message_size & 0xFFFF) << 5;  // Shift left by 5 for ARM64 encoding
   machine_code[8] = static_cast<uint8_t>((encoded_size & 0xFF) >> 0);
   machine_code[9] = static_cast<uint8_t>((encoded_size & 0xFF00) >> 8);
-#elif defined(__APPLE__) && defined(__aarch64__)
-  // Apple Silicon ARM64: No-op since we're using a simple return approach
-  // The actual message printing is handled by the host program
-  (void)machine_code; // Suppress unused parameter warning
-  (void)hello_name;   // Suppress unused parameter warning
+#endif
 #endif
 }
 
