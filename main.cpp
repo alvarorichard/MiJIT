@@ -15,15 +15,14 @@
 #include <unistd.h>    
 
 
-#include <algorithm>   
-#include <cstdint>     
-#include <cstdlib>     
-#include <iostream>    
-#include <memory>      
-#include <stdexcept>   
-#include <string>      
-#include <string_view> 
-#include <vector>      
+#include <algorithm>   // Provides std::copy() for copying data
+#include <cstdint>     // Provides fixed-width integer types like uint8_t
+#include <cstdlib>     // Provides EXIT_SUCCESS and EXIT_FAILURE constants
+#include <iostream>    // Provides std::cout, std::cerr for input/output
+#include <stdexcept>   // Provides std::runtime_error for exception handling
+#include <string>      // Provides std::string for string manipulation
+#include <string_view> // Provides std::string_view for efficient string viewing
+#include <vector>      // Provides std::vector for dynamic arrays      
 
 // Forward declarations of helper functions
 auto append_message_size(std::vector<uint8_t>& machine_code,
@@ -31,70 +30,6 @@ auto append_message_size(std::vector<uint8_t>& machine_code,
 auto show_machine_code(const std::vector<uint8_t>& machine_code) -> void;
 [[nodiscard]] auto estimate_memory_size(size_t machine_code_size) noexcept
     -> size_t;
-
-/**
- * @struct MmapDeleter
- * @brief Custom deleter for memory-mapped regions used with std::unique_ptr
- * 
- * This struct implements the deleter pattern for RAII memory management
- * of memory-mapped regions allocated with mmap().
- */
-struct MmapDeleter {
-  size_t size;  // Size of the memory region to unmap
-  
-  /**
-   * @brief Operator that performs the actual cleanup of memory-mapped region
-   * @param ptr Pointer to the memory-mapped region to be unmapped
-   */
-  auto operator()(uint8_t* ptr) const noexcept -> void
-  {
-    // Check if pointer is valid and not the special MAP_FAILED value
-    if (ptr && ptr != MAP_FAILED) {
-      munmap(ptr, size);  // Unmap the memory region from virtual address space
-    }
-  }
-};
-
-/**
- * @typedef ExecutableMemoryPtr
- * @brief Type alias for a smart pointer that automatically manages executable memory
- * 
- * This creates a unique_ptr that uses our custom MmapDeleter to automatically
- * clean up memory-mapped executable regions when they go out of scope.
- */
-using ExecutableMemoryPtr = std::unique_ptr<uint8_t, MmapDeleter>;
-
-/**
- * @brief Factory function that allocates executable memory using mmap()
- * @param size Number of bytes to allocate for executable memory
- * @return Smart pointer to the allocated executable memory region
- * @throws std::runtime_error if memory allocation fails
- * 
- * This function creates a memory region that has read, write, and execute
- * permissions, which is necessary for storing and running generated machine code.
- */
-[[nodiscard]] auto create_executable_memory(size_t size) -> ExecutableMemoryPtr
-{
-  // Allocate memory with read, write, and execute permissions
-  auto* memory = static_cast<uint8_t*>(
-      mmap(nullptr,                    // Let kernel choose the address
-           size,                       // Size of memory to allocate
-           PROT_READ |                 // Allow reading from this memory
-           PROT_WRITE |                // Allow writing to this memory  
-           PROT_EXEC,                  // Allow executing code from this memory
-           MAP_PRIVATE |               // Create private copy-on-write mapping
-           MAP_ANONYMOUS,              // Not backed by any file
-           -1,                         // No file descriptor (ignored for anonymous)
-           0));                        // No offset (ignored for anonymous)
-
-  // Check if memory allocation failed
-  if (memory == MAP_FAILED) {
-    throw std::runtime_error("Failed to allocate executable memory");
-  }
-
-  // Return smart pointer with custom deleter that will automatically cleanup
-  return ExecutableMemoryPtr{memory, MmapDeleter{size}};
-}
 
 /**
  * @brief Main function that demonstrates JIT compilation and execution
@@ -117,39 +52,71 @@ auto main() -> int
   // Create the complete greeting message that will be printed by generated code
   const auto hello_name = std::string{"Hello, "} + name + "!\n";
 
+  // Display platform information
+  std::cout << "Platform detected: ";
+#if defined(__linux__) && defined(__x86_64__)
+  std::cout << "Linux x86-64\n";
+#elif defined(__APPLE__) && defined(__x86_64__)
+  std::cout << "macOS x86-64\n";
+#elif defined(__linux__) && defined(__aarch64__)
+  std::cout << "Linux ARM64\n";
+#elif defined(__APPLE__) && defined(__aarch64__)
+  std::cout << "Apple Silicon ARM64\n";
+#endif
+
   /**
-   * x86-64 Machine Code Template Explanation:
-   * This code generates a system call to write() that prints our greeting message.
-   * The machine code performs the equivalent of: write(1, hello_name, strlen(hello_name))
+   * Multi-platform Machine Code Template Explanation:
+   * This code generates platform-specific machine code for system calls or function returns.
+   * 
+   * x86-64 (Linux/macOS): Generates a write() system call that prints our greeting message.
+   * ARM64 Linux: Generates a write() system call using ARM64 instructions.
+   * ARM64 macOS: Uses a simpler approach due to system call complexity on Apple Silicon.
    */
   std::vector<uint8_t> machine_code{
-#ifdef __linux__
-      // Linux write system call number is 1
-      0x48, 0xc7, 0xc0, 0x01,          // mov rax, 1        - Load write syscall number
-      0x00, 0x00, 0x00,                // (padding bytes for 64-bit immediate)
-#elif __APPLE__
-      // macOS write system call number is 0x02000004  
-      0x48, 0xc7, 0xc0, 0x04,          // mov rax, 0x02000004 - Load write syscall number
-      0x00, 0x00, 0x02,                // (macOS syscall numbers are different)
+#if defined(__linux__) && defined(__x86_64__)
+      // Linux x86-64: write system call number is 1
+      0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00,  // mov rax, 1        - Load write syscall number
+      0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00,  // mov rdi, 1        - Load file descriptor (stdout)
+      0x48, 0x8d, 0x35, 0x0a, 0x00, 0x00, 0x00,  // lea rsi, [rip+10] - Load address of string data
+      0x48, 0xc7, 0xc2, 0x00, 0x00, 0x00, 0x00,  // mov rdx, 0        - Load message length (filled later)
+      0x0f, 0x05,                                // syscall           - Invoke system call
+      0xc3                                       // ret               - Return to caller
+#elif defined(__APPLE__) && defined(__x86_64__)
+      // macOS x86-64: write system call number is 0x02000004
+      0x48, 0xc7, 0xc0, 0x04, 0x00, 0x00, 0x02,  // mov rax, 0x02000004 - Load write syscall number for macOS
+      0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00,  // mov rdi, 1          - Load file descriptor (stdout)
+      0x48, 0x8d, 0x35, 0x0a, 0x00, 0x00, 0x00,  // lea rsi, [rip+10]   - Load address of string data
+      0x48, 0xc7, 0xc2, 0x00, 0x00, 0x00, 0x00,  // mov rdx, 0          - Load message length (filled later)
+      0x0f, 0x05,                                // syscall             - Invoke system call
+      0xc3                                       // ret                 - Return to caller
+#elif defined(__linux__) && defined(__aarch64__)
+      // Linux ARM64: write system call number is 64
+      0x20, 0x00, 0x80, 0xd2,  // mov x0, #1       - Load file descriptor (stdout)  
+      0x41, 0x00, 0x00, 0x10,  // adr x1, #8       - Load address of string data (8 bytes ahead)
+      0x42, 0x00, 0x80, 0xd2,  // mov x2, #2       - Load message length (will be patched)
+      0x08, 0x08, 0x80, 0xd2,  // mov x8, #64      - Load write syscall number for Linux ARM64
+      0x01, 0x00, 0x00, 0xd4,  // svc #0           - Invoke system call
+      0xc0, 0x03, 0x5f, 0xd6   // ret              - Return to caller
+#elif defined(__APPLE__) && defined(__aarch64__)
+      // Apple Silicon ARM64: Simple approach - just return a success value
+      // System calls on Apple Silicon require special handling due to security restrictions
+      0x00, 0x00, 0x80, 0xd2,  // mov x0, #0       - Return success code
+      0xc0, 0x03, 0x5f, 0xd6   // ret              - Return to caller
+#else
+#error "Unsupported platform: This code supports Linux x86-64/ARM64 and macOS x86-64/ARM64 only"
 #endif
-      0x48, 0xc7, 0xc7, 0x01,          // mov rdi, 1        - Load file descriptor (stdout)
-      0x00, 0x00, 0x00,                // (padding bytes)
-      0x48, 0x8d, 0x35, 0x0a,          // lea rsi, [rip+10] - Load address of string data
-      0x00, 0x00, 0x00,                // (relative offset to string, 10 bytes ahead)
-      0x48, 0xc7, 0xc2, 0x00,          // mov rdx, 0        - Load message length (filled later)
-      0x00, 0x00, 0x00,                // (will be replaced with actual message size)
-      0x0f, 0x05,                      // syscall           - Invoke system call
-      0xc3                             // ret               - Return to caller
   };
 
   // Update the machine code template with the actual message length
   append_message_size(machine_code, hello_name);
 
   // Append the actual string data after the machine code instructions
-  // The LEA instruction above calculates the address of this string data
+  // Note: Only x86-64 and Linux ARM64 need this, as they reference the string in their syscalls
+#if !defined(__APPLE__) || !defined(__aarch64__)
   for (const auto character : hello_name) {
     machine_code.push_back(static_cast<uint8_t>(character));  // Add each character as byte
   }
+#endif
 
   // Display the generated machine code for debugging purposes
   show_machine_code(machine_code);
@@ -158,17 +125,46 @@ auto main() -> int
     // Calculate how much memory we need (must be multiple of page size)
     const auto required_memory_size = estimate_memory_size(machine_code.size());
 
-    // Allocate executable memory using RAII smart pointer
-    auto executable_memory = create_executable_memory(required_memory_size);
+    // Allocate memory with read/write permissions first (safer approach)
+    auto* memory = static_cast<uint8_t*>(
+        mmap(nullptr,                    // Let kernel choose the address
+             required_memory_size,       // Size of memory to allocate
+             PROT_READ | PROT_WRITE,     // Initially only read/write permissions
+             MAP_PRIVATE | MAP_ANONYMOUS // Private anonymous mapping
+#ifdef MAP_JIT
+             | MAP_JIT                   // Use MAP_JIT on macOS if available for better security
+#endif
+             , -1, 0));                  // No file descriptor, no offset
 
-    // Copy our generated machine code into the executable memory region
-    std::copy(machine_code.begin(),           // Source start
-              machine_code.end(),             // Source end  
-              executable_memory.get());       // Destination
+    if (memory == MAP_FAILED) {
+      throw std::runtime_error("Failed to allocate memory for machine code");
+    }
 
-    // Cast the memory address to a function pointer and execute the generated code
-    const auto func = reinterpret_cast<void (*)()>(executable_memory.get());
+    // Copy our generated machine code into the allocated memory region
+    std::copy(machine_code.begin(), machine_code.end(), memory);
+
+    // Make the memory executable after copying the code (W^X security principle)
+    if (mprotect(memory, required_memory_size, PROT_READ | PROT_EXEC) == -1) {
+      munmap(memory, required_memory_size);  // Clean up on failure
+      throw std::runtime_error("Failed to make memory executable");
+    }
+
+#if defined(__APPLE__) && defined(__aarch64__)
+    // Apple Silicon ARM64: Execute as function that returns a value
+    // Due to system call restrictions on Apple Silicon, we use a simpler approach
+    auto arm_func = reinterpret_cast<int (*)()>(memory);
+    const auto result = arm_func();  // Execute the generated ARM64 code
+    std::cout << "JIT executed successfully (returned: " << result << ")\n";
+    std::cout << hello_name;  // Print the greeting message from host code
+#else  
+    // x86-64 (Linux/macOS) and Linux ARM64: Execute as void function that handles its own output
+    // The generated code performs the system call to print the message directly
+    const auto func = reinterpret_cast<void (*)()>(memory);
     func();  // Execute the generated machine code - this will print our greeting!
+#endif
+
+    // Clean up the allocated memory
+    munmap(memory, required_memory_size);
 
   } catch (const std::exception& e) {
     // Handle any errors that occurred during memory allocation or execution
@@ -211,21 +207,38 @@ auto main() -> int
  * @param machine_code Reference to the vector containing machine code bytes
  * @param hello_name The message string whose length will be embedded in the code
  * 
- * This function modifies bytes 24-27 of the machine code to contain the length
- * of the message string. These bytes correspond to the immediate operand of the
- * "mov rdx, length" instruction that sets up the third parameter for the write() syscall.
+ * This function modifies the machine code to contain the length of the message string.
+ * The byte positions vary depending on the target architecture and platform.
  */
 auto append_message_size(std::vector<uint8_t>& machine_code,
                          std::string_view hello_name) -> void
 {
   const auto message_size = hello_name.length();  // Get length of the greeting message
 
-  // Extract each byte of the 32-bit length value and store in machine code
-  // x86-64 uses little-endian byte order (least significant byte first)
+#if defined(__linux__) && defined(__x86_64__)
+  // Linux x86-64: Patch the "mov rdx, length" instruction at bytes 24-27
   machine_code[24] = static_cast<uint8_t>((message_size & 0xFF) >> 0);        // Bits 0-7
   machine_code[25] = static_cast<uint8_t>((message_size & 0xFF00) >> 8);      // Bits 8-15  
   machine_code[26] = static_cast<uint8_t>((message_size & 0xFF0000) >> 16);   // Bits 16-23
   machine_code[27] = static_cast<uint8_t>((message_size & 0xFF000000) >> 24); // Bits 24-31
+#elif defined(__APPLE__) && defined(__x86_64__)
+  // macOS x86-64: Same as Linux x86-64, patch "mov rdx, length" at bytes 24-27
+  machine_code[24] = static_cast<uint8_t>((message_size & 0xFF) >> 0);        // Bits 0-7
+  machine_code[25] = static_cast<uint8_t>((message_size & 0xFF00) >> 8);      // Bits 8-15
+  machine_code[26] = static_cast<uint8_t>((message_size & 0xFF0000) >> 16);   // Bits 16-23
+  machine_code[27] = static_cast<uint8_t>((message_size & 0xFF000000) >> 24); // Bits 24-31
+#elif defined(__linux__) && defined(__aarch64__)
+  // Linux ARM64: Patch the "mov x2, length" instruction at bytes 8-11
+  // ARM64 uses different encoding - we need to encode the immediate value properly
+  const auto encoded_size = (message_size & 0xFFFF) << 5;  // Shift left by 5 for ARM64 encoding
+  machine_code[8] = static_cast<uint8_t>((encoded_size & 0xFF) >> 0);
+  machine_code[9] = static_cast<uint8_t>((encoded_size & 0xFF00) >> 8);
+#elif defined(__APPLE__) && defined(__aarch64__)
+  // Apple Silicon ARM64: No-op since we're using a simple return approach
+  // The actual message printing is handled by the host program
+  (void)machine_code; // Suppress unused parameter warning
+  (void)hello_name;   // Suppress unused parameter warning
+#endif
 }
 
 /**
