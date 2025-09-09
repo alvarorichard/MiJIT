@@ -88,7 +88,7 @@ The machine code output shows the actual processor instructions that MiJIT creat
 
 ## License
 
-This project is open source. Check the LICENSE file for details.
+This project is open source. under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
